@@ -144,11 +144,12 @@ uint8_t SDEmu::handleSpiByte(uint8_t byte) {
         spiState = SD_ARG_CRC;
         break;
     case SD_ARG_CRC:
-        SPI_DEBUG("SPI - CMD%d (%02X) X:%04X Y:%04X CRC: %02X\n",spiCommand^0x40,spiCommand,((spiArgXhi << 8) | spiArgXlo),((spiArgYhi << 8) | spiArgYlo),byte);
+        // assemble the 32bit LBA from the four bytes we just shifted in
         spiArg = ((uint32_t)spiArgXhi << 24)
                | ((uint32_t)spiArgXlo << 16)
                | ((uint32_t)spiArgYhi <<  8)
                |  (uint32_t)spiArgYlo;
+            SPI_DEBUG("SPI - CMD%d (%02X) spiArg=0x%08X CRC:%02X\n", spiCommand^0x40, spiCommand, spiArg, byte);
         // ignore CRC and process commands
         switch(spiCommand){
         case 0x40: //CMD0 =  RESET / GO_IDLE_STATE
@@ -514,6 +515,15 @@ int SDEmu::init_with_directory(const char *path) {
 			}
 		}
 	}
+	
+	//build MBR
+	SDPartitionEntry pe;
+	memset(&pe,0,sizeof(pe));
+	pe.state       = 0x00;                          // non-bootable
+	pe.type        = 0x06;                          // FAT16 partition
+	pe.sectorOffset= 1;                             // partition starts at LBA 1
+	pe.sectorCount = bootsector.total_sectors_32;   // size in sectors
+	SDBuildMBR(&pe);
 	return 0;
 }
 

@@ -25,7 +25,7 @@ THE SOFTWARE.
 #ifndef _SDEMULATOR_H_
 #define _SDEMULATOR_H_
 
-#include <cstring> // for memset()
+#include <cstring>
 #include <stdint.h>
 
 #define SD_IDLE_STATE             0
