@@ -38,6 +38,7 @@ THE SOFTWARE.
 #include <emscripten.h>
 #endif
 #include "SPIRAMEmulator.h"
+#include "Scaler.h"
 
 static const struct option longopts[] ={
     { "help"       , no_argument      , NULL, 'h' },
@@ -45,6 +46,9 @@ static const struct option longopts[] ={
     { "fullscreen" , no_argument      , NULL, 'f' },
     { "swrenderer" , no_argument      , NULL, 'w' },
     { "novsync"    , no_argument      , NULL, 'v' },
+#ifdef ENABLE_SCALER
+    { "scaler"     , required_argument, NULL, 'x' },
+#endif
     { "mouse"      , no_argument      , NULL, 'm' },
     { "2p"         , no_argument      , NULL, '2' },
     { "jamma"      , no_argument      , NULL, 'j' },
@@ -68,7 +72,7 @@ static const struct option longopts[] ={
     {NULL          , 0                , NULL, 0}
 };
 
-   static const char* shortopts = "hnfczlwxm2jo:i:re:p:bdt:k:s:v";
+   static const char* shortopts = "hnfczlwm2jo:i:re:p:bdt:k:s:vx:";
 
 #define printerr(fmt,...) fprintf(stderr,fmt,##__VA_ARGS__)
 
@@ -83,6 +87,22 @@ void showHelp(char* programName){
     printerr("\t--fullscreen -f     Enable full screen\n");
     printerr("\t--swrenderer -w     Use SDL software renderer (probably faster on older computers)\n");
     printerr("\t--novsync -v        Disables VSYNC (does not apply to software renderer)\n");
+#ifdef ENABLE_SCALER
+    printerr("\t--scaler -x         Set Scaler mode: 1=None");
+	#ifdef ENABLE_SCALE2X
+		printerr(" 2=Scale2x");
+	#endif
+	#ifdef ENABLE_SCALE3X
+		printerr(" 3=Scale3x");
+	#endif
+	#ifdef ENABLE_SCALE4X
+		printerr(" 4=Scale4x");
+	#endif
+	#ifdef ENABLE_CRT
+		printerr(" |16=CRT filter enabled");
+	#endif
+	printerr("\n");
+#endif
     printerr("\t--mouse -m          Start with emulated mouse enabled\n");
     printerr("\t--2p -2             Start with snes 2p mode enabled\n");
     printerr("\t--jamma -j          Start with JAMMA mode enabled\n");
@@ -177,20 +197,66 @@ int main(int argc,char **argv)
             break;
         case 'j':
                 uzebox.jamma = strtol(optarg,NULL,10);
-                if(uzebox.jamma = 0)
+                if(uzebox.jamma == 0)
                     uzebox.jamma = 1;//assume the user meant something by this...
-            break;
-        case 'o':
-                uzebox.orientation = strtol(optarg,NULL,10);
-                if(uzebox.orientation != 0 && uzebox.orientation != 90 && uzebox.orientation != 270)
-                    uzebox.orientation = 90;//assume the user meant something by this...
-            break;
-        case 'i':
-                if(optarg[0] == 'h')
-                    uzebox.mirror = SDL_FLIP_HORIZONTAL;
-                else if(optarg[0] == 'v')
-                    uzebox.mirror = SDL_FLIP_VERTICAL;
-            break;
+		break;
+	case 'o':
+		uzebox.orientation = strtol(optarg, NULL, 10);
+		if(uzebox.orientation != 0 && uzebox.orientation != 90 && uzebox.orientation != 270)
+			uzebox.orientation = 90; // assume the user meant something by this...
+		break;
+#ifdef ENABLE_SCALER
+	case 'x': { // --scaler
+		char *endptr;
+		long val = strtol(optarg, &endptr, 10);
+		if (*endptr != '\0') {
+			fprintf(stderr, "Invalid scaler value: %s\n", optarg);
+			exit(1);
+		}
+		switch (val) {
+			case 1: initial_scaler_mode = SCALER_NONE; break;
+#ifdef ENABLE_SCALE2X
+			case 2: initial_scaler_mode = SCALER_SCALE2X; break;
+#endif
+#ifdef ENABLE_SCALE3X
+			case 3: initial_scaler_mode = SCALER_SCALE3X; break;
+#endif
+#ifdef ENABLE_SCALE4X
+			case 4: initial_scaler_mode = SCALER_SCALE4X; break;
+#endif
+#ifdef ENABLE_CRT
+			case 17: initial_scaler_mode = SCALER_CRT | SCALER_NONE; break;
+#endif
+			default:
+				fprintf(stderr, "Unsupported scaler mode: %ld\n", val);
+				exit(1);
+		}
+		break;
+	}
+#endif
+	case 'i': { // --mirror
+		if (isdigit(optarg[0])) {
+			int val = strtol(optarg, NULL, 10);
+			switch (val) {
+				case 0: uzebox.mirror = SDL_FLIP_NONE; break;
+				case 1: uzebox.mirror = SDL_FLIP_HORIZONTAL; break;
+				case 2: uzebox.mirror = SDL_FLIP_VERTICAL; break;
+				case 3: uzebox.mirror = (SDL_RendererFlip)(SDL_FLIP_HORIZONTAL | SDL_FLIP_VERTICAL); break;
+				default:
+					fprintf(stderr, "Invalid mirror value: %s\n", optarg);
+					exit(1);
+			}
+		} else {
+			switch (optarg[0]) {
+				case 'h': uzebox.mirror = SDL_FLIP_HORIZONTAL; break;
+				case 'v': uzebox.mirror = SDL_FLIP_VERTICAL; break;
+				case 'b': uzebox.mirror = (SDL_RendererFlip)(SDL_FLIP_HORIZONTAL | SDL_FLIP_VERTICAL); break;
+				default: uzebox.mirror = SDL_FLIP_NONE; break;
+			}
+		}
+		break;
+	}
+
 #ifndef __EMSCRIPTEN__
         case 'r':
             uzebox.recordMovie=true;

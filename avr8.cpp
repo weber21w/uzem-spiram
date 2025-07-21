@@ -51,6 +51,14 @@ More info at uzebox.org
 #include "logo.h"
 #include "SPIRAMEmulator.h"
 #include "SDEmulator.h"
+#include "Scaler.h"
+
+#ifdef ENABLE_SCALER
+SDL_Texture *scaledTexture = nullptr;
+int currentTextureScale = 1;
+SDL_Renderer *renderer = nullptr;
+SDL_Surface *surface = nullptr;
+#endif
 
 using namespace std;
 
@@ -386,12 +394,21 @@ void avr8::write_io_x(u8 addr,u8 value)
 				if (scanline_count == 224)
 				{
 
-					SDL_UpdateTexture(texture, NULL, surface->pixels, surface->pitch);
-					SDL_RenderClear(renderer);
-					if(orientation != -1 || mirror) //probably only useful for JAMMA
-						SDL_RenderCopyEx(renderer, texture, NULL, NULL, orientation, NULL, mirror);
-					else
-						SDL_RenderCopy(renderer, texture, NULL, NULL);
+					if (activeScaler) {
+						ApplyScalerIfNeeded();
+						SDL_RenderClear(renderer);
+						if (orientation != -1 || mirror)
+							SDL_RenderCopyEx(renderer, scaledTexture, NULL, NULL, orientation, NULL, mirror);
+						else
+							SDL_RenderCopy(renderer, scaledTexture, NULL, NULL);
+					} else {
+						SDL_UpdateTexture(texture, NULL, surface->pixels, surface->pitch);
+						SDL_RenderClear(renderer);
+						if (orientation != -1 || mirror)
+							SDL_RenderCopyEx(renderer, texture, NULL, NULL, orientation, NULL, mirror);
+						else
+							SDL_RenderCopy(renderer, texture, NULL, NULL);
+					}
 					SDL_RenderPresent(renderer);
 
 #ifndef __EMSCRIPTEN__
@@ -2023,9 +2040,8 @@ bool avr8::init_sd()
 	if (SDemulator.init_with_directory(SDpath) < 0) {
 		return false;
 	}
-	SDPartitionEntry entry;
-	sectorSize = 512;
-
+    // one FAT16 partition covering the whole card
+    SDPartitionEntry entry = {};
 	entry.state = 0x00;
 	entry.startCylinder = 0;//TODO
 	entry.startHead = 0x00; //TODO
@@ -2036,16 +2052,15 @@ bool avr8::init_sd()
 	entry.sectorOffset = 1;
 	entry.sectorCount = 4294967296/512; // TODO, update with more realistic info
 
-	SDBuildMBR(&entry);
+    SDemulator.SDBuildMBR(&entry);
+    return true;
 
 	return true;
 }
 
-
 bool avr8::init_gui()
 {
-	if ( SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO | SDL_INIT_JOYSTICK) != 0 )
-	{
+	if (SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO | SDL_INIT_JOYSTICK) != 0) {
 		fprintf(stderr, "Unable to init SDL: %s\n", SDL_GetError());
 		return false;
 	}
@@ -2055,32 +2070,42 @@ bool avr8::init_gui()
 
 	int monitorWidth = 630;
 	int monitorHeight = 448;
-	if(orientation == 90 || orientation == 270){
-	    monitorHeight = 630;
+	if (orientation == 90 || orientation == 270) {
+		monitorHeight = 630;
 	}
- 
-	window = SDL_CreateWindow(caption,SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,monitorWidth,monitorHeight,fullscreen?SDL_WINDOW_FULLSCREEN:SDL_WINDOW_RESIZABLE);
-	if (!window){
+
+	window = SDL_CreateWindow(caption, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+		monitorWidth, monitorHeight,
+		fullscreen ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_RESIZABLE);
+	if (!window) {
 		fprintf(stderr, "CreateWindow failed: %s\n", SDL_GetError());
 		return false;
 	}
+
 	renderer = SDL_CreateRenderer(window, -1, sdl_flags);
-	if (!renderer){
+	if (!renderer) {
 		SDL_DestroyWindow(window);
 		fprintf(stderr, "CreateRenderer failed: %s\n", SDL_GetError());
 		return false;
 	}
+
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
 	SDL_RenderSetLogicalSize(renderer, monitorWidth, monitorHeight);
 
-	surface = SDL_CreateRGBSurface(0, VIDEO_DISP_WIDTH, 224, 32, 0, 0, 0, 0);
-	if(!surface){
+	surface = SDL_CreateRGBSurface(0, VIDEO_DISP_WIDTH, 224, 32,
+                               0x00FF0000,
+                               0x0000FF00,
+                               0x000000FF,
+                               0xFF000000);
+	if (!surface) {
 		fprintf(stderr, "CreateRGBSurface failed: %s\n", SDL_GetError());
 		return false;
 	}
 
-	texture = SDL_CreateTexture(renderer,surface->format->format,SDL_TEXTUREACCESS_STATIC,surface->w,surface->h);
-	if (!texture){
+	texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888,
+		SDL_TEXTUREACCESS_STREAMING, VIDEO_DISP_WIDTH, 224);
+	if (!texture) {
+		SDL_FreeSurface(surface);
 		SDL_DestroyRenderer(renderer);
 		SDL_DestroyWindow(window);
 		fprintf(stderr, "CreateTexture failed: %s\n", SDL_GetError());
@@ -2091,13 +2116,10 @@ bool avr8::init_gui()
 	SDL_RenderCopy(renderer, texture, NULL, NULL);
 	SDL_RenderPresent(renderer);
 
-
-	if (fullscreen)
-	{
+	if (fullscreen) {
 		SDL_ShowCursor(0);
 	}
 
-	// Open audio driver
 	SDL_AudioSpec desired;
 	memset(&desired, 0, sizeof(desired));
 	desired.freq = 15734;
@@ -2106,88 +2128,92 @@ bool avr8::init_gui()
 	desired.userdata = this;
 	desired.channels = 1;
 	desired.samples = 512;
-	if (enableSound)
-	{
-		if (SDL_OpenAudio(&desired, NULL) < 0)
-		{
+	if (enableSound) {
+		if (SDL_OpenAudio(&desired, NULL) < 0) {
 			fprintf(stderr, "Unable to open audio device, no sound will play.\n");
 			enableSound = false;
-		}
-		else
+		} else {
 			SDL_PauseAudio(0);
+		}
 	}
 
 	left_edge_cycle = cycleCounter;
-	scanline_top = -33-5;
+	scanline_top = -33 - 5;
 	scanline_count = -999;
-	//Syncronized with the kernel, this value now results in the image 
-	//being perfectly centered in both the emulator and a real TV
 	left_edge = VIDEO_LEFT_EDGE;
 
 	latched_buttons[0] = buttons[0] = ~0;
 	latched_buttons[1] = buttons[1] = ~0;
 	mouse_scale = 1;
 
-	// Precompute final palette for speed.
-	// Should build some NTSC compensation magic in here too.
-	for (int i=0; i<256; i++)
-	{
+	for (int i = 0; i < 256; i++) {
 		int red = (((i >> 0) & 7) * 255) / 7;
 		int green = (((i >> 3) & 7) * 255) / 7;
 		int blue = (((i >> 6) & 3) * 255) / 3;
 		palette[i] = SDL_MapRGB(surface->format, red, green, blue);
 	}
-	
-	hsync_more_col=SDL_MapRGB(surface->format, 255,0, 0); //red
-	hsync_less_col=SDL_MapRGB(surface->format, 255,255, 0); //yellow
+
+	hsync_more_col = SDL_MapRGB(surface->format, 255, 0, 0);     // red
+	hsync_less_col = SDL_MapRGB(surface->format, 255, 255, 0);   // yellow
 
 #ifndef __EMSCRIPTEN__
-	if (recordMovie){
-
-		if (avconv_video == NULL){
-			// Detect the pixel format that the GPU picked for optimal speed
+	if (recordMovie) {
+		if (avconv_video == NULL) {
 			char pix_fmt[] = "aaaa";
 			switch (surface->format->Rmask) {
-			case 0xff000000: pix_fmt[3] = 'r'; break;
-			case 0x00ff0000: pix_fmt[2] = 'r'; break;
-			case 0x0000ff00: pix_fmt[1] = 'r'; break;
-			case 0x000000ff: pix_fmt[0] = 'r'; break;
+				case 0xff000000: pix_fmt[3] = 'r'; break;
+				case 0x00ff0000: pix_fmt[2] = 'r'; break;
+				case 0x0000ff00: pix_fmt[1] = 'r'; break;
+				case 0x000000ff: pix_fmt[0] = 'r'; break;
 			}
 			switch (surface->format->Gmask) {
-			case 0xff000000: pix_fmt[3] = 'g'; break;
-			case 0x00ff0000: pix_fmt[2] = 'g'; break;
-			case 0x0000ff00: pix_fmt[1] = 'g'; break;
-			case 0x000000ff: pix_fmt[0] = 'g'; break;
+				case 0xff000000: pix_fmt[3] = 'g'; break;
+				case 0x00ff0000: pix_fmt[2] = 'g'; break;
+				case 0x0000ff00: pix_fmt[1] = 'g'; break;
+				case 0x000000ff: pix_fmt[0] = 'g'; break;
 			}
 			switch (surface->format->Bmask) {
-			case 0xff000000: pix_fmt[3] = 'b'; break;
-			case 0x00ff0000: pix_fmt[2] = 'b'; break;
-			case 0x0000ff00: pix_fmt[1] = 'b'; break;
-			case 0x000000ff: pix_fmt[0] = 'b'; break;
+				case 0xff000000: pix_fmt[3] = 'b'; break;
+				case 0x00ff0000: pix_fmt[2] = 'b'; break;
+				case 0x0000ff00: pix_fmt[1] = 'b'; break;
+				case 0x000000ff: pix_fmt[0] = 'b'; break;
 			}
 			printf("Pixel Format = %s\n", pix_fmt);
 			char avconv_video_cmd[1024] = {0};
-			snprintf(avconv_video_cmd, sizeof(avconv_video_cmd) - 1, "ffmpeg -y -f rawvideo -s %ux224 -pix_fmt %s -r 59.94 -i - -vf scale=960:720 -sws_flags neighbor -an -preset ultrafast -qp 0 -tune animation uzemtemp.mp4", VIDEO_DISP_WIDTH, pix_fmt);
+			snprintf(avconv_video_cmd, sizeof(avconv_video_cmd) - 1,
+				"ffmpeg -y -f rawvideo -s %ux224 -pix_fmt %s -r 59.94 -i - -vf scale=960:720 -sws_flags neighbor -an -preset ultrafast -qp 0 -tune animation uzemtemp.mp4",
+				VIDEO_DISP_WIDTH, pix_fmt);
 			avconv_video = popen(avconv_video_cmd, "w");
 		}
-		if (avconv_video == NULL){
+		if (avconv_video == NULL) {
 			fprintf(stderr, "Unable to init ffmpeg.\n");
 			return false;
 		}
 
 		avconv_audio = popen("ffmpeg -y -f u8 -ar 15734 -ac 1 -i - -acodec libmp3lame -ar 44.1k uzemtemp.mp3", "w");
-		if(avconv_audio == NULL){
+		if (avconv_audio == NULL) {
 			fprintf(stderr, "Unable to init ffmpeg.\n");
 			return false;
 		}
 	}
-#endif // __EMSCRIPTEN__
+#endif
 
-	//Set window icon
-	SDL_Surface *slogo;
-	slogo = SDL_CreateRGBSurfaceFrom((void *)&logo,32,32,32,32*4,0xFF,0xff00,0xff0000,0xff000000);
-	SDL_SetWindowIcon(window,slogo);
+	SDL_Surface *slogo = SDL_CreateRGBSurfaceFrom((void *)&logo, 32, 32, 32, 32 * 4, 0xFF, 0xff00, 0xff0000, 0xff000000);
+	SDL_SetWindowIcon(window, slogo);
 	SDL_FreeSurface(slogo);
+
+#ifdef ENABLE_SCALER
+	extern SDL_Texture *scaledTexture;
+	extern int currentTextureScale;
+	extern SDL_Renderer *renderer;
+	extern int SCREEN_WIDTH;
+	extern int SCREEN_HEIGHT;
+
+	SCREEN_WIDTH = VIDEO_DISP_WIDTH;
+	SCREEN_HEIGHT = 224;
+	currentTextureScale = 1;
+	SetScaler(initial_scaler_mode);
+#endif
 
 	return true;
 }

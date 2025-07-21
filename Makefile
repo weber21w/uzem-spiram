@@ -20,6 +20,12 @@ ifeq ($(EMSCRIPTEN_BUILD),1)
     EMSCRIPTEN_FLAGS=-s USE_SDL=2
     EMSCRIPTEN_TARGET_EXTRAS=.html --preload-file gamefile.uze --preload-file eeprom.bin
     NOGDB=1
+    SCALER_FLAGS :=
+else
+    SCALER_FLAGS := -DENABLE_SCALER -DENABLE_CRT
+    SCALER_FLAGS += -DENABLE_SCALE2X
+    SCALER_FLAGS += -DENABLE_SCALE3X
+#    SCALER_FLAGS += -DENABLE_SCALE4X
 endif
 
 #Uncomment to optimize for local CPU
@@ -63,7 +69,7 @@ else
 CPPFLAGS += -DNOGDB=1
 endif
 
-SRCS := uzem.cpp avr8.cpp uzerom.cpp $(GDB_SRCS) SDEmulator.cpp SPIRAMEmulator.cpp
+SRCS := uzem.cpp avr8.cpp uzerom.cpp $(GDB_SRCS) SDEmulator.cpp SPIRAMEmulator.cpp Scaler.cpp
 
 ######################################
 # Architecture
@@ -97,7 +103,7 @@ ifeq ($(EMSCRIPTEN_BUILD),1)
     RELEASE_CPPFLAGS = $(CPPFLAGS) $(EMSCRIPTEN_FLAGS) -O3 -s AGGRESSIVE_VARIABLE_ELIMINATION=1 --llvm-lto 3
     RELEASE_LDFLAGS  = $(LDFLAGS)  $(EMSCRIPTEN_FLAGS) -O3 -s AGGRESSIVE_VARIABLE_ELIMINATION=1 --llvm-lto 3
 else
-    RELEASE_CPPFLAGS = $(CPPFLAGS) -O3 -flto -fwhole-program
+    RELEASE_CPPFLAGS = $(CPPFLAGS) -O3 -flto -fwhole-program $(SCALER_FLAGS)
     RELEASE_LDFLAGS  = $(LDFLAGS)  -O3 -flto -fwhole-program
 endif
 
@@ -111,7 +117,7 @@ ifeq ($(EMSCRIPTEN_BUILD),1)
     DEBUG_CPPFLAGS = $(CPPFLAGS) -g $(EMSCRIPTEN_FLAGS)
     DEBUG_LDFLAGS  = $(LDFLAGS)  -g $(EMSCRIPTEN_FLAGS)
 else
-    DEBUG_CPPFLAGS = $(CPPFLAGS) -g
+    DEBUG_CPPFLAGS = $(CPPFLAGS) -g $(SCALER_FLAGS)
     DEBUG_LDFLAGS  = $(LDFLAGS)  -g
 endif
 

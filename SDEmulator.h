@@ -158,6 +158,7 @@ struct SDEmu {
 	uint32_t emulatedReadPos;
 
 	void chipSelectChanged(bool selected);
+	void SDBuildMBR(SDPartitionEntry* entry);
 	int init_with_directory(const char* path);
 	void read(unsigned char* ptr);
 	void seek(int pos);

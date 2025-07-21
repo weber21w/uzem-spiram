@@ -92,6 +92,20 @@ static void long2shortfilename(char *dst, char *src) {
 	}
 }
 
+void SDEmu::SDBuildMBR(SDPartitionEntry* entry){
+    // total bytes in the MBR (one sector)
+    emulatedMBRLength = entry->sectorOffset * 512;
+    emulatedMBR       = (uint8_t*)malloc(emulatedMBRLength);
+    memset(emulatedMBR, 0, emulatedMBRLength);
+
+    // copy in the one partition entry
+    memcpy(emulatedMBR + 0x1BE, entry, sizeof(SDPartitionEntry));
+
+    // standard MBR signature
+    emulatedMBR[0x1FE] = 0x55;
+    emulatedMBR[0x1FF] = 0xAA;
+}
+
 uint8_t SDEmu::handleSpiByte(uint8_t byte) {
     uint8_t response = 0xFF;
     switch(spiState){
@@ -131,6 +145,10 @@ uint8_t SDEmu::handleSpiByte(uint8_t byte) {
         break;
     case SD_ARG_CRC:
         SPI_DEBUG("SPI - CMD%d (%02X) X:%04X Y:%04X CRC: %02X\n",spiCommand^0x40,spiCommand,((spiArgXhi << 8) | spiArgXlo),((spiArgYhi << 8) | spiArgYlo),byte);
+        spiArg = ((uint32_t)spiArgXhi << 24)
+               | ((uint32_t)spiArgXlo << 16)
+               | ((uint32_t)spiArgYhi <<  8)
+               |  (uint32_t)spiArgYlo;
         // ignore CRC and process commands
         switch(spiCommand){
         case 0x40: //CMD0 =  RESET / GO_IDLE_STATE
